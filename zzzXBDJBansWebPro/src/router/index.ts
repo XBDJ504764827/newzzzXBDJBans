@@ -92,7 +92,7 @@ router.beforeEach((to, _from) => {
         return '/'
     }
 
-    if (requiresSuperAdmin && user && user.role !== 'system_admin') {
+    if (requiresSuperAdmin && user && user.role !== 'super_admin') {
         return '/admin/bans'
     }
 

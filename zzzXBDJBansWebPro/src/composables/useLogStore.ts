@@ -8,8 +8,8 @@ export const useLogStore = () => {
 
     const mapLogFromBackend = (l: any) => ({
         id: l.id,
-        time: l.created_at,
-        admin: l.admin_username,
+        time: l.created_at || l.time, // 兼容处理，优先使用 created_at
+        admin: l.admin_username || l.admin,
         action: l.action,
         target: l.target,
         details: l.details
