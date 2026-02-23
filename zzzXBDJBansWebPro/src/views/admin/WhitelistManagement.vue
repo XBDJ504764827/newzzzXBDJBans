@@ -174,7 +174,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '@/utils/api'
 import { 
@@ -419,6 +419,10 @@ const handleViewKzgoProfile = () => {
 }
 
 onMounted(fetchWhitelist)
+
+onUnmounted(() => {
+  window.removeEventListener('click', closeMenu)
+})
 </script>
 
 <style scoped>

@@ -144,8 +144,8 @@ void CheckWhitelist(int client)
     
     char query[512];
     Format(query, sizeof(query), 
-        "SELECT status FROM whitelist WHERE steam_id_64 = '%s' OR steam_id = '%s' OR steam_id = '%s'",
-        steamId, steamId, steamId2);
+        "SELECT status FROM whitelist WHERE steam_id_64 = '%s' OR steam_id = '%s'",
+        steamId, steamId2);
     
     g_hDatabase.Query(SQL_CheckWhitelistCallback, query, GetClientUserId(client));
 }
@@ -191,14 +191,8 @@ public void SQL_CheckWhitelistCallback(Database db, DBResultSet results, const c
         }
 
         // 没有开启验证，则直接按照白名单处理结果
-        if (StrEqual(status, "rejected"))
-        {
-            KickClient(client, "您已被拒绝访问本服务器");
-        }
-        else // pending
-        {
-            KickClient(client, "您的白名单申请正在审核中");
-        }
+        // 状态是 pending（rejected 已在前面处理返回）
+        KickClient(client, "您的白名单申请正在审核中");
     }
     else
     {

@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use regex::Regex;
 use utoipa::ToSchema;
+use std::sync::LazyLock;
+
+static RE_ID64: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^7656119\d{10}$").unwrap());
+static RE_ID2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^STEAM_[0-5]:([01]):(\d+)$").unwrap());
+static RE_ID3: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[U:1:(\d+)\]$").unwrap());
+static RE_VANITY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap());
 
 #[derive(Debug, Deserialize)]
 struct SteamLevelResponse {
@@ -71,6 +77,13 @@ impl SteamService {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
+            api_key: std::env::var("STEAM_API_KEY").expect("STEAM_API_KEY must be set"),
+        }
+    }
+
+    pub fn with_client(client: reqwest::Client) -> Self {
+        Self {
+            client,
             api_key: std::env::var("STEAM_API_KEY").expect("STEAM_API_KEY must be set"),
         }
     }
@@ -169,15 +182,12 @@ impl SteamService {
         let input = input.trim();
         
         // 1. Check if it's already SteamID64 (17 digits, starts with 7)
-        let re_id64 = Regex::new(r"^7656119\d{10}$").unwrap();
-        if re_id64.is_match(input) {
+        if RE_ID64.is_match(input) {
             return Some(input.to_string());
         }
 
         // 2. Check SteamID2: STEAM_X:Y:Z
-        // Magic: W=Z*2+Y, ID64 = W + 76561197960265728
-        let re_id2 = Regex::new(r"^STEAM_[0-5]:([01]):(\d+)$").unwrap();
-        if let Some(caps) = re_id2.captures(input) {
+        if let Some(caps) = RE_ID2.captures(input) {
             let y: u64 = caps[1].parse().ok()?;
             let z: u64 = caps[2].parse().ok()?;
             let w = z * 2 + y;
@@ -186,8 +196,7 @@ impl SteamService {
         }
 
         // 3. Check SteamID3: [U:1:AccountID]
-        let re_id3 = Regex::new(r"^\[U:1:(\d+)\]$").unwrap();
-        if let Some(caps) = re_id3.captures(input) {
+        if let Some(caps) = RE_ID3.captures(input) {
             let account_id: u64 = caps[1].parse().ok()?;
             let id64 = account_id + 76561197960265728;
             return Some(id64.to_string());
@@ -195,20 +204,17 @@ impl SteamService {
 
         // 4. Handle URLs
         if input.contains("steamcommunity.com") {
-            // Remove trailing slash
             let clean_url = input.trim_end_matches('/');
             
-            // .../profiles/ID64
             if clean_url.contains("/profiles/") {
                 if let Some(pos) = clean_url.rfind('/') {
                     let id_part = &clean_url[pos+1..];
-                    if re_id64.is_match(id_part) {
+                    if RE_ID64.is_match(id_part) {
                         return Some(id_part.to_string());
                     }
                 }
             }
             
-            // .../id/VANITY
             if clean_url.contains("/id/") {
                 if let Some(pos) = clean_url.rfind('/') {
                     let vanity = &clean_url[pos+1..];
@@ -217,11 +223,8 @@ impl SteamService {
             }
         }
 
-        // 5. Fallback: Assume it might be a vanity URL name directly if it looks like one (alphanumeric)
-        // Avoid purely numeric ones unless they failed ID64 check (which they did to get here)
-        // But be careful not to resolve garbage.
-        let re_vanity = Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-        if re_vanity.is_match(input) {
+        // 5. Fallback: Assume vanity URL name
+        if RE_VANITY.is_match(input) {
             return self.resolve_vanity_url(input).await;
         }
 

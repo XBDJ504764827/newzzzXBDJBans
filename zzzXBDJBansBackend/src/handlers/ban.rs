@@ -32,11 +32,6 @@ pub struct BanFilter {
 pub async fn list_bans(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    // Lazy expire check: Update all active bans that have expired
-    let _ = sqlx::query("UPDATE bans SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()")
-        .execute(&state.db)
-        .await;
-
     let bans = sqlx::query_as::<_, Ban>("SELECT * FROM bans ORDER BY created_at DESC")
         .fetch_all(&state.db)
         .await;
@@ -57,11 +52,6 @@ pub async fn list_bans(
 pub async fn list_public_bans(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    // Lazy expire check: Update all active bans that have expired
-    let _ = sqlx::query("UPDATE bans SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()")
-        .execute(&state.db)
-        .await;
-
     // Select specific columns to avoid exposing IP
     let bans = sqlx::query_as::<_, PublicBan>(
         "SELECT id, name, steam_id, steam_id_3, steam_id_64, reason, duration, status, admin_name, created_at, expires_at FROM bans ORDER BY created_at DESC"
@@ -75,10 +65,7 @@ pub async fn list_public_bans(
     }
 }
 
-// ... imports
-use crate::services::steam_api::SteamService;
 
-// ... check_ban
 #[utoipa::path(
     get,
     path = "/api/check_ban",
@@ -109,8 +96,7 @@ pub async fn check_ban(
     // 将输入的 SteamID 转换为 steam_id_64 格式进行匹配
     let mut steam_id_64 = String::new();
     if !steam_id.is_empty() {
-        let steam_service = SteamService::new();
-        if let Some(id64) = steam_service.resolve_steam_id(&steam_id).await {
+        if let Some(id64) = state.steam_service.resolve_steam_id(&steam_id).await {
             steam_id_64 = id64;
         }
     }
@@ -257,6 +243,7 @@ pub async fn check_ban(
     )
 )]
 pub async fn check_global_ban(
+    State(state): State<Arc<AppState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let steam_id = params.get("steam_id");
@@ -267,7 +254,7 @@ pub async fn check_global_ban(
 
     // Proxy request to GOKZ API
     let url = format!("https://api.gokz.top/api/v1/bans?steamid64={}", steam_id);
-    match reqwest::get(&url).await {
+    match state.client.get(&url).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
                 match resp.json::<serde_json::Value>().await {
@@ -376,14 +363,13 @@ pub async fn create_ban(
     let expires_at = calculate_expires_at(&payload.duration);
 
     // 解析输入的 SteamID 为各种格式
-    let steam_service = SteamService::new();
-    let steam_id_64 = steam_service.resolve_steam_id(&payload.steam_id).await
+    let steam_id_64 = state.steam_service.resolve_steam_id(&payload.steam_id).await
         .unwrap_or_else(|| payload.steam_id.clone());
     
-    let steam_id_2 = steam_service.id64_to_id2(&steam_id_64)
+    let steam_id_2 = state.steam_service.id64_to_id2(&steam_id_64)
         .unwrap_or_else(|| payload.steam_id.clone());
     
-    let steam_id_3 = steam_service.id64_to_id3(&steam_id_64)
+    let steam_id_3 = state.steam_service.id64_to_id3(&steam_id_64)
         .unwrap_or_default();
 
     let result = sqlx::query(
@@ -438,42 +424,54 @@ pub async fn update_ban(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateBanRequest>,
 ) -> impl IntoResponse {
+    // Build a single UPDATE query dynamically
+    let mut set_clauses = Vec::new();
+    let mut values: Vec<String> = Vec::new();
+
     if let Some(status) = payload.status {
-        let _ = sqlx::query("UPDATE bans SET status = ? WHERE id = ?")
-            .bind(status).bind(id)
-            .execute(&state.db).await;
+        set_clauses.push("status = ?".to_string());
+        values.push(status);
     }
-    // ... (other fields name, steam_id etc same as before)
     if let Some(name) = payload.name {
-         let _ = sqlx::query("UPDATE bans SET name = ? WHERE id = ?")
-            .bind(name).bind(id)
-            .execute(&state.db).await;
+        set_clauses.push("name = ?".to_string());
+        values.push(name);
     }
     if let Some(steam_id) = payload.steam_id {
-         let _ = sqlx::query("UPDATE bans SET steam_id = ? WHERE id = ?")
-            .bind(steam_id).bind(id)
-            .execute(&state.db).await;
+        set_clauses.push("steam_id = ?".to_string());
+        values.push(steam_id);
     }
     if let Some(ip) = payload.ip {
-         let _ = sqlx::query("UPDATE bans SET ip = ? WHERE id = ?")
-            .bind(ip).bind(id)
-            .execute(&state.db).await;
+        set_clauses.push("ip = ?".to_string());
+        values.push(ip);
     }
     if let Some(ban_type) = payload.ban_type {
-         let _ = sqlx::query("UPDATE bans SET ban_type = ? WHERE id = ?")
-            .bind(ban_type).bind(id)
-            .execute(&state.db).await;
+        set_clauses.push("ban_type = ?".to_string());
+        values.push(ban_type);
     }
     if let Some(reason) = payload.reason {
-         let _ = sqlx::query("UPDATE bans SET reason = ? WHERE id = ?")
-            .bind(reason).bind(id)
-            .execute(&state.db).await;
+        set_clauses.push("reason = ?".to_string());
+        values.push(reason);
     }
-    if let Some(duration) = payload.duration {
-         let expires_at = calculate_expires_at(&duration);
-         let _ = sqlx::query("UPDATE bans SET duration = ?, expires_at = ? WHERE id = ?")
-            .bind(duration).bind(expires_at).bind(id)
-            .execute(&state.db).await;
+    if let Some(ref duration) = payload.duration {
+        let expires_at = calculate_expires_at(duration);
+        set_clauses.push("duration = ?".to_string());
+        values.push(duration.clone());
+        if let Some(exp) = expires_at {
+            set_clauses.push("expires_at = ?".to_string());
+            values.push(exp.to_rfc3339());
+        } else {
+            set_clauses.push("expires_at = NULL".to_string());
+        }
+    }
+
+    if !set_clauses.is_empty() {
+        let sql = format!("UPDATE bans SET {} WHERE id = ?", set_clauses.join(", "));
+        let mut query = sqlx::query(&sql);
+        for v in &values {
+            query = query.bind(v);
+        }
+        query = query.bind(id);
+        let _ = query.execute(&state.db).await;
     }
 
     let _ = log_admin_action(

@@ -1,12 +1,15 @@
 use chrono::{Duration, Utc, DateTime};
 use regex::Regex;
+use std::sync::LazyLock;
+
+static RE_DURATION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)([a-zA-Z]+)$").unwrap());
 
 pub fn parse_duration(duration_str: &str) -> Option<Duration> {
     if duration_str == "permanent" || duration_str.starts_with("Until") {
         return None; // Special handling elsewhere or infinite
     }
 
-    let re = Regex::new(r"^(\d+)([a-zA-Z]+)$").unwrap();
+    let re = &*RE_DURATION;
     if let Some(caps) = re.captures(duration_str) {
         let value: i64 = caps[1].parse().ok()?;
         let unit = &caps[2];

@@ -6,12 +6,19 @@ use crate::models::ban::Ban;
 use crate::utils::rcon::send_command;
 
 
+
 pub async fn start_background_task(state: Arc<AppState>) {
-    tracing::info!("Background Task Started: Player IP Enforcement");
+    tracing::info!("Background Task Started: Player IP Enforcement + Ban Expiry");
     let mut interval = interval(Duration::from_secs(60));
 
     loop {
         interval.tick().await;
+
+        // Expire stale bans
+        let _ = sqlx::query("UPDATE bans SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()")
+            .execute(&state.db)
+            .await;
+
         if let Err(e) = check_all_servers(&state).await {
             tracing::error!("Background Task Error: {}", e);
         }

@@ -124,6 +124,8 @@ impl utoipa::Modify for SecurityAddon {
 pub struct AppState {
     pub db: sqlx::MySqlPool,
     pub client: reqwest::Client,
+    pub steam_service: services::steam_api::SteamService,
+    pub jwt_secret: String,
 }
 
 #[tokio::main]
@@ -133,12 +135,27 @@ async fn main() {
 
     let pool = db::establish_connection().await;
 
-    // FIX: Always remove the known broken migration record to prevent VersionMismatch on different envs
+    // FIX: Always remove known broken migration records to prevent VersionMismatch
     tracing::info!("Attempting to clear specific migration records...");
-    
-    match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260216190000").execute(&pool).await {
-        Ok(_) => tracing::info!("Cleared migration 20260216190000"),
-        Err(e) => tracing::warn!("Failed to clear 20260216190000: {}", e),
+    let dirty_migrations: &[i64] = &[
+        20260216190000,
+        20260217130000,
+        20260125020000,
+        20260222155050,
+        20260222170049,
+        20260221131757,
+    ];
+    for version in dirty_migrations {
+        match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+            .bind(version)
+            .execute(&pool)
+            .await
+        {
+            Ok(done) => if done.rows_affected() > 0 {
+                tracing::info!("Cleared migration {}. Rows affected: {}", version, done.rows_affected());
+            },
+            Err(e) => tracing::warn!("Failed to clear migration {}: {}", version, e),
+        }
     }
 
     // Force re-run init migration if admins table is missing
@@ -147,31 +164,6 @@ async fn main() {
     if table_exists.0 == 0 {
         tracing::info!("'admins' table missing, forcing re-run of init migration...");
         let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260125000000").execute(&pool).await;
-    }
-    
-    match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260217130000").execute(&pool).await {
-         Ok(_) => tracing::info!("Cleared dirty migration 20260217130000"),
-         Err(e) => tracing::warn!("Failed to clear 20260217130000: {}", e),
-    }
-
-    match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260125020000").execute(&pool).await {
-         Ok(done) => tracing::info!("Cleared dirty migration 20260125020000. Rows affected: {}", done.rows_affected()),
-         Err(e) => tracing::error!("Failed to clear dirty migration 20260125020000: {}", e),
-    }
-
-    match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260222155050").execute(&pool).await {
-         Ok(done) => tracing::info!("Cleared dirty migration 20260222155050. Rows affected: {}", done.rows_affected()),
-         Err(e) => tracing::error!("Failed to clear dirty migration 20260222155050: {}", e),
-    }
-
-    match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260222170049").execute(&pool).await {
-         Ok(done) => tracing::info!("Cleared dirty migration 20260222170049. Rows affected: {}", done.rows_affected()),
-         Err(e) => tracing::error!("Failed to clear dirty migration 20260222170049: {}", e),
-    }
-
-    match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260221131757").execute(&pool).await {
-         Ok(done) => tracing::info!("Cleared missing migration 20260221131757. Rows affected: {}", done.rows_affected()),
-         Err(e) => tracing::error!("Failed to clear missing migration 20260221131757: {}", e),
     }
 
     // Run migrations
@@ -182,9 +174,15 @@ async fn main() {
 
     ensure_super_admin(&pool).await;
 
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    let client = reqwest::Client::new();
+    let steam_service = services::steam_api::SteamService::with_client(client.clone());
+
     let state = Arc::new(AppState { 
         db: pool,
-        client: reqwest::Client::new(),
+        client,
+        steam_service,
+        jwt_secret,
     });
 
     // Spawn background task FIRST, cloning state

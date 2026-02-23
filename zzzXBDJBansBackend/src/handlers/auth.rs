@@ -61,8 +61,7 @@ pub async fn login(
                     exp: expiration as usize,
                 };
                 
-                let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
-                let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_ref())).unwrap();
+                let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(state.jwt_secret.as_ref())).unwrap();
 
                 return (StatusCode::OK, Json(json!({ "token": token, "user": { "username": user.username, "role": user.role } }))).into_response();
             } else {

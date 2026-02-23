@@ -10,8 +10,9 @@ use crate::models::server::{
     CreateGroupRequest, CreateServerRequest, UpdateServerRequest, CheckServerRequest
 };
 use crate::handlers::auth::Claims;
-use crate::utils::log_admin_action; // Ensure this is accessible
+use crate::utils::log_admin_action;
 use crate::utils::rcon::check_rcon;
+use std::sync::LazyLock;
 
 // --- Groups ---
 
@@ -45,19 +46,7 @@ pub async fn list_server_groups(
     for g in groups {
         let group_servers: Vec<Server> = servers.iter()
             .filter(|s| s.group_id == g.id)
-            .map(|s| Server {
-                id: s.id,
-                group_id: s.group_id,
-                name: s.name.clone(),
-                ip: s.ip.clone(),
-                port: s.port,
-                rcon_password: s.rcon_password.clone(),
-                created_at: s.created_at,
-                verification_enabled: s.verification_enabled,
-                enable_whitelist: s.enable_whitelist,
-                min_rating: s.min_rating,
-                min_steam_level: s.min_steam_level,
-            })
+            .cloned()
             .collect();
 
         result.push(GroupWithServers {
@@ -199,37 +188,48 @@ pub async fn update_server(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateServerRequest>,
 ) -> impl IntoResponse {
-    // Current server fetch for validation
-    let current_server = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?").bind(id).fetch_optional(&state.db).await.unwrap_or(None);
-    if let Some(srv) = current_server {
-    }
+    // Build a single UPDATE query dynamically
+    // We use a unified approach: convert everything to string-based binding
+    struct BindVal { clause: String, val: String }
+    let mut binds: Vec<BindVal> = Vec::new();
 
     if let Some(name) = payload.name {
-        let _ = sqlx::query("UPDATE servers SET name = ? WHERE id = ?").bind(name).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "name = ?".into(), val: name });
     }
     if let Some(ip) = payload.ip {
-        let _ = sqlx::query("UPDATE servers SET ip = ? WHERE id = ?").bind(ip).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "ip = ?".into(), val: ip });
     }
     if let Some(port) = payload.port {
-        let _ = sqlx::query("UPDATE servers SET port = ? WHERE id = ?").bind(port).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "port = ?".into(), val: port.to_string() });
     }
-     if let Some(pwd) = payload.rcon_password {
-        let _ = sqlx::query("UPDATE servers SET rcon_password = ? WHERE id = ?").bind(pwd).bind(id).execute(&state.db).await;
+    if let Some(pwd) = payload.rcon_password {
+        binds.push(BindVal { clause: "rcon_password = ?".into(), val: pwd });
     }
     if let Some(verif) = payload.verification_enabled {
-        let _ = sqlx::query("UPDATE servers SET verification_enabled = ? WHERE id = ?").bind(verif).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "verification_enabled = ?".into(), val: if verif { "1".into() } else { "0".into() } });
     }
     if let Some(wl) = payload.enable_whitelist {
-        let _ = sqlx::query("UPDATE servers SET enable_whitelist = ? WHERE id = ?").bind(wl).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "enable_whitelist = ?".into(), val: if wl { "1".into() } else { "0".into() } });
     }
     if let Some(mr) = payload.min_rating {
-        let _ = sqlx::query("UPDATE servers SET min_rating = ? WHERE id = ?").bind(mr).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "min_rating = ?".into(), val: mr.to_string() });
     }
     if let Some(ml) = payload.min_steam_level {
-        let _ = sqlx::query("UPDATE servers SET min_steam_level = ? WHERE id = ?").bind(ml).bind(id).execute(&state.db).await;
+        binds.push(BindVal { clause: "min_steam_level = ?".into(), val: ml.to_string() });
     }
 
-     let _ = log_admin_action(&state.db, &user.sub, "update_server", &format!("ID: {}", id), "Updated server").await;
+    if !binds.is_empty() {
+        let clauses: Vec<&str> = binds.iter().map(|b| b.clause.as_str()).collect();
+        let sql = format!("UPDATE servers SET {} WHERE id = ?", clauses.join(", "));
+        let mut query = sqlx::query(&sql);
+        for b in &binds {
+            query = query.bind(&b.val);
+        }
+        query = query.bind(id);
+        let _ = query.execute(&state.db).await;
+    }
+
+    let _ = log_admin_action(&state.db, &user.sub, "update_server", &format!("ID: {}", id), "Updated server").await;
 
     (StatusCode::OK, Json("Server updated")).into_response()
 }
@@ -332,6 +332,10 @@ pub struct BanPlayerRequest {
     pub ban_type: String, // "account" or "ip"
 }
 
+static RE_STATUS_PLAYER: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"#\s+(\d+)\s+\d+\s+"(.+?)"\s+(\S+)\s+(\S+)\s+(\d+)"#).unwrap()
+});
+
 #[utoipa::path(
     get,
     path = "/api/servers/{id}/players",
@@ -370,12 +374,8 @@ pub async fn get_server_players(
             tracing::info!("RCON 'status' output: \n{}", output); // Debug log
 
             let mut players = Vec::new();
-            // Regex to parse status output
-            // Regex: #\s*(\d+)\s+\d+\s+"(.+?)"\s+(\S+)\s+(\S+)\s+(\d+)
-            // Output format: # userid slot "name" steamid time ping ...
-            let re = Regex::new(r#"#\s+(\d+)\s+\d+\s+"(.+?)"\s+(\S+)\s+(\S+)\s+(\d+)"#).unwrap();
 
-            for cap in re.captures_iter(&output) {
+            for cap in RE_STATUS_PLAYER.captures_iter(&output) {
                  let userid = cap[1].parse::<i32>().unwrap_or(-1);
                  let name = cap[2].to_string();
                  let steam_id = cap[3].to_string();

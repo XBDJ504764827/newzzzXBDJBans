@@ -6,6 +6,11 @@ use axum::{
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use crate::handlers::auth::Claims;
+use std::sync::LazyLock;
+
+static JWT_SECRET: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string())
+});
 
 pub async fn auth_middleware(
     mut req: Request,
@@ -26,11 +31,10 @@ pub async fn auth_middleware(
     }
 
     let token = &auth_header[7..];
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
     
     let token_data = decode::<Claims>(
         token,
-        &DecodingKey::from_secret(secret.as_ref()),
+        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
         &Validation::default(),
     );
 
