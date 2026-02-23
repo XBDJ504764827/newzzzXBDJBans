@@ -203,7 +203,9 @@ pub async fn update_server(
         binds.push(BindVal { clause: "port = ?".into(), val: port.to_string() });
     }
     if let Some(pwd) = payload.rcon_password {
-        binds.push(BindVal { clause: "rcon_password = ?".into(), val: pwd });
+        if !pwd.is_empty() {
+            binds.push(BindVal { clause: "rcon_password = ?".into(), val: pwd });
+        }
     }
     if let Some(verif) = payload.verification_enabled {
         binds.push(BindVal { clause: "verification_enabled = ?".into(), val: if verif { "1".into() } else { "0".into() } });
