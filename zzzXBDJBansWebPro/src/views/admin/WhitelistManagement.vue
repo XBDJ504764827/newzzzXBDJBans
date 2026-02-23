@@ -89,22 +89,65 @@
 
         <!-- 封禁检测详情展示 -->
         <template #expandedRowRender="{ record }">
-          <div v-if="banCache[record.steam_id_64 || record.steam_id]">
-            <h4 style="color: #ff4d4f; font-weight: 600; margin-bottom: 12px">GOKZ 全局封禁详情</h4>
-            <a-list size="small" bordered :data-source="banCache[record.steam_id_64 || record.steam_id]">
-              <template #renderItem="{ item }">
-                <a-list-item>
-                  <a-descriptions size="small" :column="2" style="width: 100%">
-                    <a-descriptions-item label="类型"><a-tag color="error">{{ item.ban_type }}</a-tag></a-descriptions-item>
-                    <a-descriptions-item label="服务器">{{ item.server_name }}</a-descriptions-item>
-                    <a-descriptions-item label="时间">{{ new Date(item.created_on).toLocaleString() }}</a-descriptions-item>
-                    <a-descriptions-item label="状态">{{ item.expires_on ? (new Date(item.expires_on) > new Date() ? '生效中' : '已过期') : '永久' }}</a-descriptions-item>
-                  </a-descriptions>
-                </a-list-item>
-              </template>
-            </a-list>
+          <div v-if="banCache[record.steam_id_64 || record.steam_id]" style="padding: 12px 0">
+            <h4 style="color: #ff4d4f; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px">
+              <GlobalOutlined /> GOKZ 全局封禁记录库
+            </h4>
+            <div style="display: flex; flex-direction: column; gap: 16px">
+              <a-card 
+                v-for="item in banCache[record.steam_id_64 || record.steam_id]" 
+                :key="item.id" 
+                size="small" 
+                :bordered="true"
+                style="border-left: 4px solid #ff4d4f; border-radius: 4px; background: #fffcfc"
+              >
+                <div style="display: flex; gap: 16px">
+                  <!-- 头像展示 -->
+                  <div style="flex-shrink: 0">
+                    <a-avatar :size="64" shape="square" :src="`https://avatars.steamstatic.com/${item.avatar_hash}_full.jpg`" v-if="item.avatar_hash">
+                      {{ item.player_name?.charAt(0) }}
+                    </a-avatar>
+                    <a-avatar :size="64" shape="square" v-else>
+                      {{ item.player_name?.charAt(0) }}
+                    </a-avatar>
+                  </div>
+
+                  <!-- 核心内容 -->
+                  <div style="flex: 1">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px">
+                      <div>
+                        <span style="font-size: 16px; font-weight: 600; margin-right: 8px">{{ item.player_name }}</span>
+                        <a-tag color="error">{{ item.ban_type }}</a-tag>
+                        <a-tag :color="item.expires_on ? (new Date(item.expires_on) > new Date() ? 'error' : 'default') : 'error'">
+                          {{ item.expires_on ? (new Date(item.expires_on) > new Date() ? '生效中' : '已过期') : '永久封禁' }}
+                        </a-tag>
+                      </div>
+                      <span class="mono-text" style="color: rgba(0,0,0,0.45); font-size: 12px">#{{ item.id }}</span>
+                    </div>
+
+                    <a-descriptions size="small" :column="3" style="margin-bottom: 12px">
+                      <a-descriptions-item label="服务器">{{ item.server_name }} (ID: {{ item.server_id }})</a-descriptions-item>
+                      <a-descriptions-item label="封禁时间">{{ new Date(item.created_on).toLocaleString() }}</a-descriptions-item>
+                      <a-descriptions-item label="到期时间">{{ item.expires_on ? new Date(item.expires_on).toLocaleString() : '永久' }}</a-descriptions-item>
+                    </a-descriptions>
+
+                    <!-- 管理员备注 -->
+                    <div v-if="item.notes" style="background: rgba(0,0,0,0.02); padding: 8px; border-radius: 4px; margin-bottom: 12px; border: 1px dashed rgba(0,0,0,0.1)">
+                      <div style="font-size: 12px; color: rgba(0,0,0,0.45); margin-bottom: 4px">管理员备注 (Notes):</div>
+                      <div style="font-size: 13px; color: rgba(0,0,0,0.85)">{{ item.notes }}</div>
+                    </div>
+
+                    <!-- 详细检测报告 stats -->
+                    <div v-if="item.stats" style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; overflow-x: auto">
+                      <div style="color: #6a9955; margin-bottom: 4px">// 系统自动检测报告 (System Stats)</div>
+                      <div style="white-space: pre-wrap">{{ item.stats }}</div>
+                    </div>
+                  </div>
+                </div>
+              </a-card>
+            </div>
           </div>
-          <div v-else style="color: rgba(0,0,0,0.45); text-align: center">无全局封禁记录</div>
+          <div v-else style="color: rgba(0,0,0,0.45); text-align: center; padding: 24px">无全局封禁记录</div>
         </template>
       </a-table>
     </a-card>
@@ -245,7 +288,9 @@ const columns = computed(() => {
     { title: 'Steam IDs', key: 'steamIds' },
     { title: '申请时间', key: 'time', width: 180 },
   ];
-  if (activeTab.value === 'approved') base.push({ title: '处理人', key: 'handler', width: 120 });
+  if (activeTab.value === 'approved' || activeTab.value === 'rejected') {
+    base.push({ title: '执行管理', key: 'handler', width: 120 });
+  }
   if (activeTab.value === 'rejected') base.push({ title: '拒绝理由', key: 'reason' });
   base.push({ title: '操作', key: 'action', align: 'right', width: 150 });
   return base;
