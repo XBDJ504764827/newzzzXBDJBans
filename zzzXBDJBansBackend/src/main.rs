@@ -1,4 +1,5 @@
 use axum::{
+    http::{header, Method},
     routing::{get, post},
     Router,
 };
@@ -8,7 +9,7 @@ use dotenvy::dotenv;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 
 mod db;
 mod handlers;
@@ -135,50 +136,18 @@ async fn main() {
 
     let pool = db::establish_connection().await;
 
-    // FIX: Always remove known broken migration records to prevent VersionMismatch
-    tracing::info!("Attempting to clear specific migration records...");
-    let dirty_migrations: &[i64] = &[
-        20260216190000,
-        20260217130000,
-        20260125020000,
-        20260222155050,
-        20260222170049,
-        20260221131757,
-    ];
-    for version in dirty_migrations {
-        match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
-            .bind(version)
-            .execute(&pool)
-            .await
-        {
-            Ok(done) => if done.rows_affected() > 0 {
-                tracing::info!("Cleared migration {}. Rows affected: {}", version, done.rows_affected());
-            },
-            Err(e) => tracing::warn!("Failed to clear migration {}: {}", version, e),
-        }
-    }
-
-    // Force re-run init migration if admins table is missing
-    let table_exists: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'admins' AND TABLE_SCHEMA = DATABASE()")
-        .fetch_one(&pool).await.unwrap_or((0,));
-    if table_exists.0 == 0 {
-        tracing::info!("'admins' table missing, forcing re-run of init migration...");
-        let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20260125000000").execute(&pool).await;
-    }
-
     // Run migrations
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
         .expect("Failed to run migrations");
 
-    ensure_super_admin(&pool).await;
-
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .expect("JWT_SECRET is required. Please set JWT_SECRET in environment variables.");
     let client = reqwest::Client::new();
     let steam_service = services::steam_api::SteamService::with_client(client.clone());
 
-    let state = Arc::new(AppState { 
+    let state = Arc::new(AppState {
         db: pool,
         client,
         steam_service,
@@ -233,7 +202,25 @@ async fn main() {
         .route("/api/servers/:id/players", get(handlers::server::get_server_players))
         .route("/api/servers/:id/kick", axum::routing::post(handlers::server::kick_player))
         .route("/api/servers/:id/ban", axum::routing::post(handlers::server::ban_player))
-        .route_layer(axum::middleware::from_fn(middleware::auth_middleware));
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), middleware::auth_middleware));
+
+    let allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS")
+        .expect("CORS_ALLOWED_ORIGINS is required. Example: https://admin.example.com,http://localhost:5173")
+        .split(',')
+        .map(|origin| origin.trim())
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| header::HeaderValue::from_str(origin)
+            .expect("Invalid origin in CORS_ALLOWED_ORIGINS"))
+        .collect::<Vec<_>>();
+
+    if allowed_origins.is_empty() {
+        panic!("CORS_ALLOWED_ORIGINS must contain at least one origin");
+    }
+
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origins)
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers(Any);
 
     let app = Router::new()
         .route("/", get(root))
@@ -247,7 +234,7 @@ async fn main() {
         .merge(protected_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state);
 
     let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
@@ -261,31 +248,4 @@ async fn main() {
 
 async fn root() -> &'static str {
     "zzzXBDJBans Backend API"
-}
-
-async fn ensure_super_admin(pool: &sqlx::MySqlPool) {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
-
-    if count == 0 {
-        tracing::info!("No admins found. Creating default super_admin.");
-        let username = "admin";
-        let password = "123456"; 
-        let hashed = bcrypt::hash(password, bcrypt::DEFAULT_COST).expect("Failed to hash password");
-        
-        let _ = sqlx::query(
-            "INSERT INTO admins (username, password, role) VALUES (?, ?, 'super_admin')"
-        )
-        .bind(username)
-        .bind(hashed)
-        .execute(pool)
-        .await
-        .expect("Failed to create default admin");
-        
-        tracing::info!("Default admin created: user='admin', pass='123456'");
-    } else {
-        tracing::info!("Super admin exists. Skipping creation.");
-    }
 }

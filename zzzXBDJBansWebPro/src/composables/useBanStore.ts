@@ -4,13 +4,19 @@ import api from '../utils/api'
 // Global state
 const bans = ref([])
 const publicBans = ref([])
+const bansTotal = ref(0)
+const bansPage = ref(1)
+const bansPageSize = ref(15)
 
 export const useBanStore = () => {
 
-    const fetchBans = async () => {
+    const fetchBans = async (page = bansPage.value, pageSize = bansPageSize.value) => {
         try {
-            const res = await api.get('/bans')
-            bans.value = res.data
+            const res = await api.get('/bans', { params: { page, page_size: pageSize } })
+            bans.value = res.data.items
+            bansTotal.value = res.data.total
+            bansPage.value = res.data.page
+            bansPageSize.value = res.data.page_size
         } catch (e) {
             console.error(e)
         }
@@ -90,6 +96,9 @@ export const useBanStore = () => {
     return {
         bans,
         publicBans,
+        bansTotal,
+        bansPage,
+        bansPageSize,
         fetchBans,
         fetchPublicBans,
         addBan,

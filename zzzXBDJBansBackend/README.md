@@ -52,6 +52,8 @@ DATABASE_URL=mysql://用户名:密码@127.0.0.1/数据库名
 RUST_LOG=info,zzzXBDJBansBackend=debug
 SERVER_HOST=0.0.0.0
 SERVER_PORT=3000
+JWT_SECRET=请设置高强度随机密钥
+CORS_ALLOWED_ORIGINS=https://admin.example.com,http://localhost:5173
 STEAM_API_KEY=steamWebApi
 ```
 **游戏服务器配置项示例**
@@ -94,6 +96,8 @@ cargo run
 cargo build --release
 ./target/release/zzzXBDJBansBackend
 ```
+
+> 注意：启动前必须配置 `JWT_SECRET` 与 `CORS_ALLOWED_ORIGINS`。未配置时程序会直接报错退出。
 
 ## 📚 API 文档
 

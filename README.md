@@ -23,12 +23,13 @@
    DATABASE_URL=mysql://用户名:密码@主机/数据库名
    SERVER_HOST=0.0.0.0
    SERVER_PORT=3000
+   JWT_SECRET=请设置高强度随机密钥
+   CORS_ALLOWED_ORIGINS=http://localhost:5173
    STEAM_API_KEY=你的SteamAPIKey
    ```
 3. 构建：`cargo build --release`
 4. 运行：`./target/release/zzzXBDJBansBackend`
    - *首次运行会自动执行数据库迁移。*
-   - *默认超级管理员：`admin` / `123456`。*
 
 ---
 
@@ -81,3 +82,4 @@
 - **自动化验证**: 后端 worker 会自动获取玩家的 Steam 等级及 GOKZ Rating。
 - **全局封禁库**: 系统支持通过后端的 `/api/check_global_ban/bulk` 接口代理查询 GOKZ 全局封禁状态。
 - **操作审计**: 所有的管理员操作均会记录在 `audit_logs` 表中。
+- **管理端列表分页**: `/api/bans`、`/api/admins`、`/api/whitelist`、`/api/whitelist/pending`、`/api/whitelist/rejected` 统一返回分页结构：`{ items, total, page, page_size }`。

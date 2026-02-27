@@ -23,7 +23,8 @@
         :columns="columns"
         :data-source="adminList"
         row-key="id"
-        :pagination="{ pageSize: 15 }"
+        :pagination="pagination"
+        @change="handleTableChange"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'role'">
@@ -91,12 +92,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import type { TablePaginationConfig } from 'ant-design-vue'
 import { useAuthStore } from '@/composables/useAuthStore'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 
-const { adminList, isSystemAdmin, addAdmin, updateAdmin, deleteAdmin, currentUser, fetchAdmins } = useAuthStore()
+const { adminList, adminsTotal, adminsPage, adminsPageSize, isSystemAdmin, addAdmin, updateAdmin, deleteAdmin, currentUser, fetchAdmins } = useAuthStore()
 
 const columns = [
   { title: '用户名', dataIndex: 'username', key: 'username' },
@@ -107,9 +109,21 @@ const columns = [
   { title: '操作', key: 'action', align: 'right' as const },
 ]
 
+const pagination = computed(() => ({
+  current: adminsPage.value,
+  pageSize: adminsPageSize.value,
+  total: adminsTotal.value,
+  showSizeChanger: true,
+  showTotal: (total: number) => `共 ${total} 条`,
+}))
+
 onMounted(() => {
     fetchAdmins()
 })
+
+const handleTableChange = async (pager: TablePaginationConfig) => {
+  await fetchAdmins(pager.current || 1, pager.pageSize || 15)
+}
 
 const showModal = ref(false)
 const modalLoading = ref(false)

@@ -20,14 +20,14 @@
 
     <a-card :bordered="false" :bodyStyle="{ padding: 0 }">
       <a-tabs v-model:activeKey="activeTab" style="margin: 0 24px">
-        <a-tab-pane key="approved" :tab="`已通过 (${whitelist.length})`" />
+        <a-tab-pane key="approved" :tab="`已通过 (${approvedPagination.total})`" />
         <a-tab-pane key="pending">
           <template #tab>
             待审核
-            <a-badge v-if="pendingList.length > 0" :count="pendingList.length" :offset="[10, -5]" />
+            <a-badge v-if="pendingPagination.total > 0" :count="pendingPagination.total" :offset="[10, -5]" />
           </template>
         </a-tab-pane>
-        <a-tab-pane key="rejected" :tab="`已拒绝 (${rejectedList.length})`" />
+        <a-tab-pane key="rejected" :tab="`已拒绝 (${rejectedPagination.total})`" />
       </a-tabs>
 
       <a-table
@@ -35,7 +35,8 @@
         :data-source="currentList"
         :loading="loading"
         row-key="id"
-        :pagination="{ pageSize: 15, showSizeChanger: true }"
+        :pagination="currentPagination"
+        @change="handleTableChange"
         :customRow="customRow"
         style="padding: 0 24px 24px"
       >
@@ -218,6 +219,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import type { TablePaginationConfig } from 'ant-design-vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '@/utils/api'
 import { 
@@ -235,11 +237,15 @@ import { message } from 'ant-design-vue'
 const route = useRoute()
 const router = useRouter()
 
+const loading = ref(false)
+const activeTab = ref<string>((route.query.tab as string) || 'approved')
+
 const whitelist = ref<any[]>([])
 const pendingList = ref<any[]>([])
 const rejectedList = ref<any[]>([])
-const loading = ref(false)
-const activeTab = ref<string>((route.query.tab as string) || 'approved')
+const approvedPagination = reactive({ current: 1, pageSize: 15, total: 0 })
+const pendingPagination = reactive({ current: 1, pageSize: 15, total: 0 })
+const rejectedPagination = reactive({ current: 1, pageSize: 15, total: 0 })
 
 const banCache = ref<any>({})
 const lookupLoading = ref(false)
@@ -302,24 +308,64 @@ const currentList = computed(() => {
   return rejectedList.value
 })
 
+const currentPagination = computed(() => {
+  const source = activeTab.value === 'approved'
+    ? approvedPagination
+    : activeTab.value === 'pending'
+      ? pendingPagination
+      : rejectedPagination
+
+  return {
+    current: source.current,
+    pageSize: source.pageSize,
+    total: source.total,
+    showSizeChanger: true,
+    showTotal: (total: number) => `共 ${total} 条`,
+  }
+})
+
 watch(activeTab, (newTab) => {
     router.replace({ query: { ...route.query, tab: newTab } })
+    fetchWhitelist()
 })
+
+const fetchApprovedList = async () => {
+  const res = await api.get('/whitelist', {
+    params: { page: approvedPagination.current, page_size: approvedPagination.pageSize }
+  })
+  whitelist.value = res.data.items
+  approvedPagination.current = res.data.page
+  approvedPagination.pageSize = res.data.page_size
+  approvedPagination.total = res.data.total
+}
+
+const fetchPendingList = async () => {
+  const res = await api.get('/whitelist/pending', {
+    params: { page: pendingPagination.current, page_size: pendingPagination.pageSize }
+  })
+  pendingList.value = res.data.items
+  pendingPagination.current = res.data.page
+  pendingPagination.pageSize = res.data.page_size
+  pendingPagination.total = res.data.total
+}
+
+const fetchRejectedList = async () => {
+  const res = await api.get('/whitelist/rejected', {
+    params: { page: rejectedPagination.current, page_size: rejectedPagination.pageSize }
+  })
+  rejectedList.value = res.data.items
+  rejectedPagination.current = res.data.page
+  rejectedPagination.pageSize = res.data.page_size
+  rejectedPagination.total = res.data.total
+}
 
 const fetchWhitelist = async () => {
   loading.value = true
   try {
-    const [approvedRes, pendingRes, rejectedRes] = await Promise.all([
-      api.get('/whitelist'),
-      api.get('/whitelist/pending'),
-      api.get('/whitelist/rejected')
-    ])
-    whitelist.value = approvedRes.data
-    pendingList.value = pendingRes.data
-    rejectedList.value = rejectedRes.data
-    
+    await Promise.all([fetchApprovedList(), fetchPendingList(), fetchRejectedList()])
+
     // 异步检查封禁
-    checkGlobalBans([...whitelist.value, ...pendingList.value, ...rejectedList.value])
+    checkGlobalBans(currentList.value)
   } catch (err) {
     console.error(err)
     message.error('获取列表失败')
@@ -345,6 +391,24 @@ const checkGlobalBans = async (list: any[]) => {
     }
 }
 
+const handleTableChange = async (pager: TablePaginationConfig) => {
+  const current = pager.current || 1
+  const pageSize = pager.pageSize || 15
+
+  if (activeTab.value === 'approved') {
+    approvedPagination.current = current
+    approvedPagination.pageSize = pageSize
+  } else if (activeTab.value === 'pending') {
+    pendingPagination.current = current
+    pendingPagination.pageSize = pageSize
+  } else {
+    rejectedPagination.current = current
+    rejectedPagination.pageSize = pageSize
+  }
+
+  await fetchWhitelist()
+}
+
 const handleLookup = async () => {
     if (!addForm.steam_id) return
     lookupLoading.value = true
@@ -368,7 +432,11 @@ const handleAdd = async () => {
         if (res.status === 201) {
             message.success('已添加')
             showAddModal.value = false
-            fetchWhitelist()
+            if (activeTab.value !== 'approved') {
+              activeTab.value = 'approved'
+            }
+            approvedPagination.current = 1
+            await fetchWhitelist()
         }
     } catch (err: any) {
         message.error('添加失败: ' + (err.response?.data?.error || ''))
@@ -379,7 +447,10 @@ const handleApprove = async (id: any) => {
   try {
     await api.put(`/whitelist/${id}/approve`)
     message.success('已通过')
-    fetchWhitelist()
+    if (activeTab.value === 'pending' && pendingList.value.length === 1 && pendingPagination.current > 1) {
+      pendingPagination.current -= 1
+    }
+    await fetchWhitelist()
   } catch (err) {
     message.error('操作失败')
   }
@@ -397,7 +468,10 @@ const confirmReject = async () => {
     await api.put(`/whitelist/${rejectTargetId.value}/reject`, { reason: rejectReason.value })
     message.success('已拒绝')
     showRejectModal.value = false
-    fetchWhitelist()
+    if (activeTab.value === 'pending' && pendingList.value.length === 1 && pendingPagination.current > 1) {
+      pendingPagination.current -= 1
+    }
+    await fetchWhitelist()
   } catch (err) {
     message.error('操作失败')
   }
@@ -407,7 +481,14 @@ const handleDelete = async (id: any) => {
   try {
     await api.delete(`/whitelist/${id}`)
     message.success('已删除')
-    fetchWhitelist()
+    if (activeTab.value === 'approved' && whitelist.value.length === 1 && approvedPagination.current > 1) {
+      approvedPagination.current -= 1
+    } else if (activeTab.value === 'pending' && pendingList.value.length === 1 && pendingPagination.current > 1) {
+      pendingPagination.current -= 1
+    } else if (activeTab.value === 'rejected' && rejectedList.value.length === 1 && rejectedPagination.current > 1) {
+      rejectedPagination.current -= 1
+    }
+    await fetchWhitelist()
   } catch (err) {
     message.error('删除失败')
   }

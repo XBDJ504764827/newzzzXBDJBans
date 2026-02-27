@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State, Extension},
+    extract::{Path, Query, State, Extension},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -7,8 +7,30 @@ use axum::{
 use crate::handlers::auth::Claims;
 use std::sync::Arc;
 use crate::{AppState, models::whitelist::{Whitelist, CreateWhitelistRequest, ApplyWhitelistRequest, RejectWhitelistRequest}};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use crate::services::steam_api::PlayerSummary;
+
+#[derive(Deserialize)]
+pub struct PaginationQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+fn normalize_pagination(params: &PaginationQuery) -> (u64, u64, i64) {
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = ((page - 1) * page_size) as i64;
+    (page, page_size, offset)
+}
 
 // 获取已审核通过的白名单列表（管理员）
 #[utoipa::path(
@@ -23,16 +45,29 @@ use crate::services::steam_api::PlayerSummary;
 )]
 pub async fn list_whitelist(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<PaginationQuery>,
 ) -> impl IntoResponse {
-    let whitelist = sqlx::query_as::<_, Whitelist>("SELECT * FROM whitelist WHERE status = 'approved' ORDER BY created_at DESC")
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("Failed to fetch whitelist: {:?}", e);
-            vec![]
-        });
+    let (page, page_size, offset) = normalize_pagination(&params);
 
-    Json(whitelist)
+    let total_result = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM whitelist WHERE status = 'approved'")
+        .fetch_one(&state.db)
+        .await;
+
+    let items_result = sqlx::query_as::<_, Whitelist>(
+        "SELECT * FROM whitelist WHERE status = 'approved' ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    )
+    .bind(page_size as i64)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await;
+
+    match (total_result, items_result) {
+        (Ok(total), Ok(items)) => Json(PaginatedResponse { items, total, page, page_size }).into_response(),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::error!("Failed to fetch whitelist: {:?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Failed to fetch whitelist" }))).into_response()
+        }
+    }
 }
 
 // 获取待审核的申请列表（管理员）
@@ -48,16 +83,29 @@ pub async fn list_whitelist(
 )]
 pub async fn list_pending(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<PaginationQuery>,
 ) -> impl IntoResponse {
-    let pending = sqlx::query_as::<_, Whitelist>("SELECT * FROM whitelist WHERE status = 'pending' ORDER BY created_at DESC")
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("Failed to fetch pending whitelist: {:?}", e);
-            vec![]
-        });
+    let (page, page_size, offset) = normalize_pagination(&params);
 
-    Json(pending)
+    let total_result = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM whitelist WHERE status = 'pending'")
+        .fetch_one(&state.db)
+        .await;
+
+    let items_result = sqlx::query_as::<_, Whitelist>(
+        "SELECT * FROM whitelist WHERE status = 'pending' ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    )
+    .bind(page_size as i64)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await;
+
+    match (total_result, items_result) {
+        (Ok(total), Ok(items)) => Json(PaginatedResponse { items, total, page, page_size }).into_response(),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::error!("Failed to fetch pending whitelist: {:?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Failed to fetch pending whitelist" }))).into_response()
+        }
+    }
 }
 
 // 获取已拒绝的申请列表（管理员）
@@ -73,16 +121,29 @@ pub async fn list_pending(
 )]
 pub async fn list_rejected(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<PaginationQuery>,
 ) -> impl IntoResponse {
-    let rejected = sqlx::query_as::<_, Whitelist>("SELECT * FROM whitelist WHERE status = 'rejected' ORDER BY created_at DESC")
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("Failed to fetch rejected whitelist: {:?}", e);
-            vec![]
-        });
+    let (page, page_size, offset) = normalize_pagination(&params);
 
-    Json(rejected)
+    let total_result = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM whitelist WHERE status = 'rejected'")
+        .fetch_one(&state.db)
+        .await;
+
+    let items_result = sqlx::query_as::<_, Whitelist>(
+        "SELECT * FROM whitelist WHERE status = 'rejected' ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    )
+    .bind(page_size as i64)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await;
+
+    match (total_result, items_result) {
+        (Ok(total), Ok(items)) => Json(PaginatedResponse { items, total, page, page_size }).into_response(),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::error!("Failed to fetch rejected whitelist: {:?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Failed to fetch rejected whitelist" }))).into_response()
+        }
+    }
 }
 
 // 玩家提交申请（公开接口，无需认证）

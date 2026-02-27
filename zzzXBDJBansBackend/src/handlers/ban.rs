@@ -10,13 +10,34 @@ use crate::models::ban::{Ban, PublicBan, CreateBanRequest, UpdateBanRequest};
 use crate::handlers::auth::Claims;
 use crate::utils::{log_admin_action, calculate_expires_at};
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct BanFilter {
     steam_id: Option<String>,
     ip: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PaginationQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+fn normalize_pagination(params: &PaginationQuery) -> (u64, u64, i64) {
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = ((page - 1) * page_size) as i64;
+    (page, page_size, offset)
 }
 
 #[utoipa::path(
@@ -31,14 +52,23 @@ pub struct BanFilter {
 )]
 pub async fn list_bans(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<PaginationQuery>,
 ) -> impl IntoResponse {
-    let bans = sqlx::query_as::<_, Ban>("SELECT * FROM bans ORDER BY created_at DESC")
+    let (page, page_size, offset) = normalize_pagination(&params);
+
+    let total_result = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM bans")
+        .fetch_one(&state.db)
+        .await;
+
+    let items_result = sqlx::query_as::<_, Ban>("SELECT * FROM bans ORDER BY created_at DESC LIMIT ? OFFSET ?")
+        .bind(page_size as i64)
+        .bind(offset)
         .fetch_all(&state.db)
         .await;
 
-    match bans {
-        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match (total_result, items_result) {
+        (Ok(total), Ok(items)) => (StatusCode::OK, Json(PaginatedResponse { items, total, page, page_size })).into_response(),
+        (Err(e), _) | (_, Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 

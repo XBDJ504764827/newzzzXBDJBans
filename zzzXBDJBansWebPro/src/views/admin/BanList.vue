@@ -7,7 +7,7 @@
       </div>
       <div class="right">
         <a-space>
-          <a-button @click="fetchBans" :loading="loading">
+          <a-button @click="refreshBans" :loading="loading">
             <template #icon><ReloadOutlined /></template>
             刷新
           </a-button>
@@ -48,7 +48,9 @@
         :columns="columns"
         :data-source="filteredBans"
         row-key="id"
-        :pagination="{ pageSize: 15, showSizeChanger: true }"
+        :loading="loading"
+        :pagination="pagination"
+        @change="handleTableChange"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'player'">
@@ -153,6 +155,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import type { TablePaginationConfig } from 'ant-design-vue'
 import { useBanStore } from '@/composables/useBanStore'
 import { useAuthStore } from '@/composables/useAuthStore'
 import { useCommunityStore } from '@/composables/useCommunityStore'
@@ -165,7 +168,7 @@ import {
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 
-const { bans, addBan, removeBan, updateBan, fetchBans, deleteBanRecord } = useBanStore()
+const { bans, bansTotal, bansPage, bansPageSize, addBan, removeBan, updateBan, fetchBans, deleteBanRecord } = useBanStore()
 const { currentUser, isSystemAdmin } = useAuthStore()
 const { serverGroups, fetchServerGroups } = useCommunityStore()
 
@@ -196,6 +199,14 @@ const columns = [
   { title: '操作', key: 'action', align: 'right' as const, width: 200 },
 ]
 
+const pagination = computed(() => ({
+  current: bansPage.value,
+  pageSize: bansPageSize.value,
+  total: bansTotal.value,
+  showSizeChanger: true,
+  showTotal: (total: number) => `共 ${total} 条`,
+}))
+
 onMounted(async () => {
     loading.value = true
     await Promise.all([fetchBans(), fetchServerGroups()])
@@ -209,8 +220,8 @@ const filteredBans = computed(() => {
   }
   if (searchForm.query) {
     const q = searchForm.query.toLowerCase()
-    result = result.filter((b: any) => 
-      b.name.toLowerCase().includes(q) || 
+    result = result.filter((b: any) =>
+      b.name.toLowerCase().includes(q) ||
       (b.steam_id && b.steam_id.toLowerCase().includes(q)) ||
       (b.steam_id_64 && b.steam_id_64.includes(q)) ||
       (b.ip && b.ip.includes(q))
@@ -218,6 +229,24 @@ const filteredBans = computed(() => {
   }
   return result
 })
+
+const handleTableChange = async (pager: TablePaginationConfig) => {
+  loading.value = true
+  try {
+    await fetchBans(pager.current || 1, pager.pageSize || 15)
+  } finally {
+    loading.value = false
+  }
+}
+
+const refreshBans = async () => {
+  loading.value = true
+  try {
+    await fetchBans()
+  } finally {
+    loading.value = false
+  }
+}
 
 const getServerName = (serverId: any) => {
     if (!serverId) return '网页端 / 全局'

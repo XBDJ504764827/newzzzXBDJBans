@@ -4,6 +4,9 @@ import api from '../utils/api'
 // State
 const currentUser = ref<any>(null)
 const adminList = ref<any[]>([])
+const adminsTotal = ref(0)
+const adminsPage = ref(1)
+const adminsPageSize = ref(15)
 
 export const useAuthStore = () => {
 
@@ -48,10 +51,13 @@ export const useAuthStore = () => {
     }
 
     // Fetch Admins
-    const fetchAdmins = async () => {
+    const fetchAdmins = async (page = adminsPage.value, pageSize = adminsPageSize.value) => {
         try {
-            const res = await api.get('/admins')
-            adminList.value = res.data
+            const res = await api.get('/admins', { params: { page, page_size: pageSize } })
+            adminList.value = res.data.items
+            adminsTotal.value = res.data.total
+            adminsPage.value = res.data.page
+            adminsPageSize.value = res.data.page_size
         } catch (e) {
             console.error("Failed to fetch admins", e)
         }
@@ -124,6 +130,9 @@ export const useAuthStore = () => {
     return {
         currentUser,
         adminList,
+        adminsTotal,
+        adminsPage,
+        adminsPageSize,
         isSystemAdmin,
         login,
         checkAuth,
